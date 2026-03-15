@@ -182,6 +182,75 @@ class InquiryTests(unittest.TestCase):
             self.assertIn("If deleted:", report)
             self.assertIn("Recommended action:", report)
 
+    def test_attach_openclaw_inquiry_tracks_progress_by_file_count(self) -> None:
+        class RecordingProgress:
+            def __init__(self) -> None:
+                self.events: list[tuple[object, ...]] = []
+
+            def start_count(self, label, total=None) -> None:
+                self.events.append(("start_count", label, total))
+
+            def set_label(self, label, *, force=False) -> None:
+                self.events.append(("set_label", label, force))
+
+            def tick(self) -> None:
+                self.events.append(("tick",))
+
+            def count_tick(self, increment=1, *, force=False) -> None:
+                self.events.append(("count_tick", increment, force))
+
+            def finish(self, label) -> None:
+                self.events.append(("finish", label))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = write_fixture_tree(Path(temp_dir))
+            snapshot = ccr.build_live_snapshot(workspace)
+            result = ccr.analyze_snapshots([snapshot])
+            progress = RecordingProgress()
+            target_count = len(ccr._collect_highlight_targets(result.highlights))
+
+            def fake_batch(_cli_path, *, agent_id, batch, timeout_seconds):
+                self.assertEqual(agent_id, "main")
+                self.assertGreater(timeout_seconds, 0)
+                return {
+                    str(item["absolute_path"]): {
+                        "status": "ok",
+                        "what_it_is": "Fixture file",
+                        "why_it_exists": "Fixture explanation.",
+                        "authorship": "likely_openclaw_subsystem",
+                        "importance": "important",
+                        "if_deleted": "The workflow would lose a supporting file.",
+                        "recommended_action": "keep",
+                        "action_reason": "The file supports normal operation.",
+                        "archive_note": "not_needed",
+                        "standardness": "common_convention",
+                        "evidence_basis": ["path"],
+                        "confidence": "medium",
+                    }
+                    for item in batch
+                }
+
+            with mock.patch.object(ccr, "_discover_openclaw_cli", return_value=Path("/tmp/openclaw")), \
+                 mock.patch.object(ccr, "_discover_default_agent_id", return_value="main"), \
+                 mock.patch.object(ccr, "_request_openclaw_inquiry_batch", side_effect=fake_batch):
+                ccr._attach_openclaw_inquiry(
+                    result,
+                    openclaw_root=Path(snapshot.scan.openclaw_root),
+                    cache_path=None,
+                    batch_size=10,
+                    timeout_seconds=30,
+                    progress=progress,
+                )
+
+            self.assertIn(("start_count", "Querying highlight files", target_count), progress.events)
+            completed_by_progress = sum(
+                int(event[1])
+                for event in progress.events
+                if event[0] == "count_tick"
+            )
+            self.assertEqual(completed_by_progress, target_count)
+            self.assertIn(("finish", "Highlight file inquiry complete"), progress.events)
+
 
 if __name__ == "__main__":
     unittest.main()

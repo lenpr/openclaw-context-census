@@ -1,14 +1,31 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 
 from tests.helpers import REFERENCE_TIME, load_content_census_module, write_fixture_tree
 
 
 ccr = load_content_census_module()
+
+
+def _write_exact_duplicate_fixture_files(workspace: Path) -> tuple[Path, Path]:
+    duplicate_dir = workspace / "duplicates"
+    duplicate_dir.mkdir(parents=True, exist_ok=True)
+    content = "duplicate session output\n"
+    duplicate_paths = (
+        duplicate_dir / "session-copy-a.log",
+        duplicate_dir / "session-copy-b.log",
+    )
+    timestamp = datetime(2026, 1, 10, tzinfo=UTC).timestamp()
+    for path in duplicate_paths:
+        path.write_text(content, encoding="utf-8")
+        os.utime(path, (timestamp, timestamp))
+    return duplicate_paths
 
 
 class AnalysisTests(unittest.TestCase):
@@ -58,6 +75,11 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(mirror_entry.recommendation, ccr.Recommendation.IGNORE)
         self.assertIn("WORKSPACE_MIRROR", mirror_entry.reason_codes)
 
+    def test_workspace_file_is_not_marked_duplicate_only_because_of_workspace_mirror(self) -> None:
+        agents = self._entry("AGENTS.md", root_type="workspace")
+        self.assertNotIn("DUPLICATE_HASH", agents.reason_codes)
+        self.assertEqual(self.payload["summary"]["duplicate_file_group_count"], 0)
+
     def test_credentials_and_large_model_are_classified_sensibly(self) -> None:
         credentials = self._entry("credentials/openai.key", root_type="openclaw")
         model = self._entry("tools/whisper.cpp/models/ggml-base.bin", root_type="workspace")
@@ -94,6 +116,8 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(self.payload["cleanup_plan"]["mode"], "recommendations_only")
         self.assertTrue(self.payload["cleanup_plan"]["requires_human_review"])
         self.assertFalse(self.payload["cleanup_plan"]["destructive_actions_included"])
+        self.assertEqual(self.payload["summary"]["duplicate_file_group_count"], 0)
+        self.assertEqual(self.payload["summary"]["duplicate_reclaimable_bytes"], 0)
         self.assertEqual(agents["known_reference"]["id"], "agents_md")
         self.assertEqual(skill["skill_registry_reference"]["panel_title"], "ClawHub Skill Reference")
         self.assertEqual(lockfile["file_type_reference"]["id"], "basename_package_lock_json")
@@ -106,13 +130,54 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn("sensitive_data", credentials["manual_review_reasons"])
         self.assertEqual(credentials["suggested_next_step"], "inspect_before_any_change")
 
+    def test_cleanup_plan_is_ranked_and_non_destructive(self) -> None:
+        cleanup_plan = self.payload["cleanup_plan"]
+        candidates = cleanup_plan["candidates"]
+
+        self.assertEqual(
+            [candidate["review_rank"] for candidate in candidates],
+            list(range(1, len(candidates) + 1)),
+        )
+        self.assertTrue(all(candidate["requires_human_review"] for candidate in candidates))
+
+        order = {
+            recommendation: index
+            for index, recommendation in enumerate(cleanup_plan["recommended_review_order"])
+        }
+        recommendation_indexes = [order[candidate["recommendation"]] for candidate in candidates]
+        self.assertEqual(recommendation_indexes, sorted(recommendation_indexes))
+
+        package_lock_index = next(
+            index
+            for index, candidate in enumerate(candidates)
+            if candidate["logical_path"] == "package-lock.json"
+        )
+        memory_index = next(
+            index
+            for index, candidate in enumerate(candidates)
+            if candidate["logical_path"] == "memory/2026-03-14.md"
+        )
+        self.assertLess(package_lock_index, memory_index)
+
+        keep_synced_entry = next(
+            candidate
+            for candidate in candidates
+            if candidate["logical_path"] == "AGENTS.md"
+        )
+        self.assertEqual(keep_synced_entry["suggested_next_step"], "leave_in_place")
+        self.assertEqual(keep_synced_entry["manual_review_reasons"], [])
+
     def test_html_report_contains_primary_sections_and_external_links(self) -> None:
         report = ccr.render_html_report(self.result)
 
         self.assertIn("Context Census Report", report)
         self.assertIn("Check First", report)
+        self.assertIn("Duplicates", report)
         self.assertIn("Folders &amp; Size", report)
         self.assertIn("File Explorer", report)
+        self.assertIn('id="duplicate-filter"', report)
+        self.assertIn("Duplicates Only", report)
+        self.assertIn("full duplicate file list", report)
         self.assertIn("Evidence Guide &amp; External Links", report)
         self.assertIn("Run summary facts &amp; metadata.", report)
         self.assertNotIn('<div class="hero-panel-title">Run Summary</div>', report)
@@ -131,6 +196,49 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn("&#9662;", report)
         self.assertNotIn('class="catalog-shell" open', report)
         self.assertNotIn("Load More", report)
+
+    def test_markdown_report_includes_duplicates_empty_state(self) -> None:
+        report = ccr.render_markdown_report(self.result)
+
+        self.assertIn("## Duplicates", report)
+        self.assertIn("No exact duplicate file groups were identified.", report)
+
+    def test_duplicate_finder_groups_exact_duplicate_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = write_fixture_tree(Path(temp_dir))
+            duplicate_paths = _write_exact_duplicate_fixture_files(workspace)
+            snapshot = ccr.build_live_snapshot(workspace)
+            result = ccr.analyze_snapshots(
+                [snapshot],
+                config=ccr.AnalysisConfig(
+                    archive_days=30,
+                    stale_days=90,
+                    large_file_bytes=32 * 1024,
+                    reference_time_utc=REFERENCE_TIME,
+                ),
+            )
+            payload = json.loads(ccr.render_json_report(result))
+            group = payload["highlights"]["duplicate_groups"][0]
+            duplicate_names = {path.name for path in duplicate_paths}
+            duplicate_size = duplicate_paths[0].stat().st_size
+
+            self.assertEqual(payload["summary"]["duplicate_file_group_count"], 1)
+            self.assertEqual(payload["summary"]["duplicate_file_count"], 2)
+            self.assertEqual(payload["summary"]["duplicate_reclaimable_bytes"], duplicate_size)
+            self.assertEqual(payload["highlights"]["duplicate_groups_summary"]["group_count"], 1)
+            self.assertTrue(payload["highlights"]["duplicate_groups_summary"]["workspace_mirrors_excluded"])
+            self.assertEqual(group["duplicate_count"], 2)
+            self.assertEqual(group["reclaimable_bytes"], duplicate_size)
+            self.assertEqual(
+                {Path(member["path"]).name for member in group["members"]},
+                duplicate_names,
+            )
+            self.assertTrue(all("DUPLICATE_HASH" in member["reason_codes"] for member in group["members"]))
+
+            markdown = ccr.render_markdown_report(result)
+            self.assertIn("## Duplicates", markdown)
+            self.assertIn("duplicates/session-copy-a.log", markdown)
+            self.assertIn("duplicates/session-copy-b.log", markdown)
 
 
 if __name__ == "__main__":
