@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.DS_Store
+.coverage
+.pytest_cache/
+reports/
+snapshots/
+build/
+dist/
+*.egg-info/
+htmlcov/
+*.html
+!README.md
