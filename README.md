@@ -36,7 +36,13 @@ The tool is designed to be copied to an OpenClaw machine and run directly.
 
 ## Output
 
-The primary output is one standalone HTML file.
+By default the tool writes one standalone HTML file for human review.
+
+You can also choose output formats explicitly:
+
+- JSON for agent and automation use
+- Markdown for compact text review or prompt handoff
+- all three from one scan when you want both human and agent workflows
 
 If OpenClaw inquiry is available during a live run, the script may also write a sidecar cache file next to the HTML report:
 
@@ -44,6 +50,8 @@ If OpenClaw inquiry is available during a live run, the script may also write a 
 
 That cache is local-only and is meant to avoid repeating the same inquiry requests for highlighted files.
 Inquiry is optional and only appears when the local OpenClaw instance can be reached from the machine running the script.
+
+The JSON output is the canonical machine-readable format. It includes the full analyzed entry set plus a `cleanup_plan` section that is meant to be consumed by Codex, OpenClaw, or another agent as the basis for cautious repository cleanup planning.
 
 ## Run It
 
@@ -65,11 +73,32 @@ python3 content_census_report.py ~/.openclaw/workspace --openclaw-root ~/.opencl
 
 Useful flags:
 
-- `--html` to control the output path
+- `--html [PATH]` to write HTML output
+- `--json [PATH]` to write a machine-readable report
+- `--markdown [PATH]` to write a Markdown summary
+- `--all-formats` to write HTML, JSON, and Markdown from one scan
 - `--archive-days` to tune archive-style recommendations
 - `--stale-days` to tune stale-file signaling
 - `--large-file-mb` to tune the large-file threshold
 - `--include-hidden` to include hidden files and directories in the scan
+
+Generate JSON only:
+
+```bash
+python3 content_census_report.py ~/.openclaw/workspace --json
+```
+
+Generate HTML and Markdown with a shared custom stem:
+
+```bash
+python3 content_census_report.py ~/.openclaw/workspace --html reports/content-census-report.html --markdown
+```
+
+Generate all formats from one scan:
+
+```bash
+python3 content_census_report.py ~/.openclaw/workspace --all-formats
+```
 
 See full CLI help with:
 
@@ -86,6 +115,13 @@ The HTML report currently includes:
 - `Folders & Size` for rolled-up storage distribution
 - `File Explorer` for filtering, sorting, and progressive reveal
 - `Evidence Guide & External Links` for recommendation codes, evidence assumptions, and reference links
+
+The JSON output includes:
+
+- full scan metadata and thresholds
+- all analyzed entries with recommendation and evidence data
+- highlights and known reference metadata
+- an explicit `cleanup_plan` queue for agent-assisted repository triage
 
 ## Repository Layout
 
@@ -121,10 +157,6 @@ The test suite uses synthetic filesystem fixtures created at runtime so no perso
 - The repository avoids checked-in generated reports and local snapshot exports.
 - The tests exercise the shipped standalone file directly instead of a separate package copy.
 
-## Intended GitHub Repository
-
-This working tree is prepared for a future GitHub repository at:
+## GitHub Repository
 
 - `https://github.com/lenpr/openclaw-context-census`
-
-No remote is configured or pushed by this cleanup step.

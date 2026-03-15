@@ -90,9 +90,21 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(self.payload["report_version"], "0.1")
         self.assertIn("folder_overview", self.payload)
         self.assertGreater(self.payload["folder_overview"]["total_size_bytes"], 0)
+        self.assertIn("cleanup_plan", self.payload)
+        self.assertEqual(self.payload["cleanup_plan"]["mode"], "recommendations_only")
+        self.assertTrue(self.payload["cleanup_plan"]["requires_human_review"])
+        self.assertFalse(self.payload["cleanup_plan"]["destructive_actions_included"])
         self.assertEqual(agents["known_reference"]["id"], "agents_md")
         self.assertEqual(skill["skill_registry_reference"]["panel_title"], "ClawHub Skill Reference")
         self.assertEqual(lockfile["file_type_reference"]["id"], "basename_package_lock_json")
+
+        credentials = next(
+            candidate
+            for candidate in self.payload["cleanup_plan"]["candidates"]
+            if candidate["logical_path"] == "credentials/openai.key"
+        )
+        self.assertIn("sensitive_data", credentials["manual_review_reasons"])
+        self.assertEqual(credentials["suggested_next_step"], "inspect_before_any_change")
 
     def test_html_report_contains_primary_sections_and_external_links(self) -> None:
         report = ccr.render_html_report(self.result)
