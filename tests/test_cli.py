@@ -15,6 +15,21 @@ ccr = load_content_census_module()
 
 
 class CliTests(unittest.TestCase):
+    def test_build_script_check_passes_for_generated_standalone_file(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "build_single_file.py"),
+                "--check",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+        )
+
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+
     def test_help_text_describes_available_output_modes(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(PROJECT_ROOT / "content_census_report.py"), "--help"],

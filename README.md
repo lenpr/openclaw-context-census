@@ -4,6 +4,7 @@
 
 The repo is intentionally minimal:
 - one deployable Python file
+- modular source files that assemble into that deployable file
 - direct tests against small synthetic filesystem fixtures
 - no checked-in report output
 - no checked-in personal snapshot data
@@ -128,12 +129,16 @@ The JSON output includes:
 ```text
 .
 ├── content_census_report.py
+├── src_content_census/
+├── scripts/
 ├── README.md
 ├── .gitignore
 └── tests/
 ```
 
 This repository is intentionally not a Python package. The standalone script is the product.
+
+The editable source lives under `src_content_census/`, and `scripts/build_single_file.py` deterministically rebuilds `content_census_report.py`.
 
 ## Test It
 
@@ -153,9 +158,22 @@ The test suite uses synthetic filesystem fixtures created at runtime so no perso
 
 ## Development Notes
 
-- The script contains the analyzer, renderer, file knowledge, ClawHub knowledge, and live scan logic in one file on purpose.
+- The shipped product is still one standalone script.
+- The editable source is split into section files under `src_content_census/` and assembled into `content_census_report.py`.
 - The repository avoids checked-in generated reports and local snapshot exports.
 - The tests exercise the shipped standalone file directly instead of a separate package copy.
+
+Rebuild the standalone script after source edits with:
+
+```bash
+python3 scripts/build_single_file.py
+```
+
+Verify the generated script is up to date with:
+
+```bash
+python3 scripts/build_single_file.py --check
+```
 
 ## GitHub Repository
 
